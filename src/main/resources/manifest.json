@@ -1,0 +1,12 @@
+{
+  "Group": "kweebecjs",
+  "Name": "kweebecjs",
+  "Version": "0.0.0-DEV",
+  "Main": "games.jvrcruz.kweebecjs.KweebecjsPlugin",
+  "ServerVersion": "*",
+  "Authors": [
+    {
+      "Name": "jvrcruz"
+    }
+  ]
+}
