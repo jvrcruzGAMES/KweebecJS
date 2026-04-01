@@ -2,6 +2,10 @@
 
 A Hytale server mod built with Java.
 
+## Documentation
+
+Server script API documentation is available in [DOCS.md](DOCS.md).
+
 ## Building
 
 ```bash
@@ -22,6 +26,6 @@ Builds the fat JAR and copies it to the Hytale server `mods/` folder.
 
 Use the included run configurations in your IDE:
 
-- **Run Hytale Server** — Builds, deploys, and starts the server
-- **Debug Hytale Server** — Same as Run, with remote debugger on port 5005
-- **Build Mod** — Compiles without deploying or starting the server
+- **Run Hytale Server** - Builds, deploys, and starts the server
+- **Debug Hytale Server** - Same as Run, with remote debugger on port 5005
+- **Build Mod** - Compiles without deploying or starting the server

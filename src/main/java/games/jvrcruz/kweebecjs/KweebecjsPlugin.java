@@ -49,6 +49,7 @@ public class KweebecjsPlugin extends JavaPlugin {
         try {
             Files.createDirectories(kweebecRootDir);
             Files.createDirectories(serverScriptsDir);
+            recipeInjector.clearRegisteredRecipes();
             runtimeItemAssetManager.apply();
             getCommandRegistry().registerCommand(new ReloadServerScriptsCommand(this::reloadServerScripts));
 
@@ -56,9 +57,6 @@ public class KweebecjsPlugin extends JavaPlugin {
 
             int serverExecutedScripts = runtime.executeAll(serverScriptsDir, serverEnvironment);
             emitRecipeRegistrationEvent();
-            events.emit(KweebecJSEventType.PLUGIN_READY, Map.of(
-                    "serverScripts", serverExecutedScripts
-            ));
             getLogger().at(Level.INFO).log(
                     "KweebecJS started. Executed "
                             + serverExecutedScripts + " server script(s) from " + serverScriptsDir.toAbsolutePath().normalize()
@@ -67,19 +65,14 @@ public class KweebecjsPlugin extends JavaPlugin {
             getLogger().at(Level.SEVERE).log(
                     "KweebecJS failed initializing or reading script directories under " + kweebecRootDir.toAbsolutePath().normalize(), e
             );
-            events.emit(KweebecJSEventType.PLUGIN_ERROR, Map.of("message", "Failed initializing or reading script directories."));
         } catch (RuntimeException e) {
             getLogger().at(Level.SEVERE).log("KweebecJS failed executing JS runtime.", e);
-            events.emit(KweebecJSEventType.PLUGIN_ERROR, Map.of("message", "Runtime execution failed."));
         }
     }
 
     @Override
     protected void shutdown() {
         runtimeItemAssetManager.remove();
-        if (events != null) {
-            events.emit(KweebecJSEventType.PLUGIN_SHUTDOWN);
-        }
         getLogger().at(Level.INFO).log("KweebecJS shut down.");
     }
 

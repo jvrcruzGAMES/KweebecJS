@@ -61,6 +61,10 @@ public final class RecipeFilter {
         return matchesOutput(recipe) && matchesInputs(recipe) && matchesBenchRequirements(recipe);
     }
 
+    public List<BenchRequirement> benchRequirements() {
+        return benchRequirements == null ? List.of() : List.copyOf(benchRequirements);
+    }
+
     private boolean matchesOutput(CraftingRecipe recipe) {
         if (outputItemId == null) {
             return true;
@@ -93,7 +97,7 @@ public final class RecipeFilter {
         }
 
         BenchRequirement[] recipeBenchRequirements = recipe.getBenchRequirement();
-        if (recipeBenchRequirements == null || recipeBenchRequirements.length != benchRequirements.size()) {
+        if (recipeBenchRequirements == null || recipeBenchRequirements.length < benchRequirements.size()) {
             return false;
         }
 

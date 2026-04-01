@@ -28,8 +28,10 @@ import java.util.function.Supplier;
 
 public class RecipeInjector {
     private static final String DELETED_RECIPE_BENCH_ID = "KweebecJS_DeletedRecipeBench";
+    private static final String PATCH_DIRECTORY = "KweebecJS";
     private final Field recipeIdField;
     private final Field materialTagField;
+    private final Field primaryOutputQuantityField;
     private final Class<?> pluginClass;
     private final Supplier<String> assetPackNameSupplier;
     private final List<String> registeredRecipePaths = new ArrayList<>();
@@ -42,6 +44,8 @@ public class RecipeInjector {
             recipeIdField.setAccessible(true);
             materialTagField = MaterialQuantity.class.getDeclaredField("tag");
             materialTagField.setAccessible(true);
+            primaryOutputQuantityField = CraftingRecipe.class.getDeclaredField("primaryOutputQuantity");
+            primaryOutputQuantityField.setAccessible(true);
         } catch (NoSuchFieldException e) {
             throw new IllegalStateException("Could not access recipe/material fields for registration.", e);
         }
@@ -90,13 +94,19 @@ public class RecipeInjector {
                 continue;
             }
 
-            overrideRecipe(
-                    entry.getKey(),
+            BenchRequirement[] remainingRequirements = removeMatchedBenchRequirements(recipe, recipeFilter);
+            CraftingRecipe replacement = new CraftingRecipe(
                     recipe.getInput(),
                     recipe.getPrimaryOutput(),
-                    disabledBenchRequirements(),
-                    recipe.getTimeSeconds()
+                    recipe.getOutputs(),
+                    getPrimaryOutputQuantity(recipe),
+                    remainingRequirements.length == 0 ? disabledBenchRequirements() : remainingRequirements,
+                    recipe.getTimeSeconds(),
+                    recipe.isKnowledgeRequired(),
+                    recipe.getRequiredMemoriesLevel()
             );
+            setRecipeId(replacement, entry.getKey());
+            loadRecipe(entry.getKey(), replacement);
             deletedRecipeIds.add(entry.getKey());
         }
         return deletedRecipeIds;
@@ -108,6 +118,7 @@ public class RecipeInjector {
         String outputId = definition.outputId();
         float timeSeconds = definition.timeSeconds();
         String diagramId = definition.diagramId();
+        int requiredMemoriesLevel = definition.requiredMemoriesLevel();
 
         BenchRequirement[] finalRequirements = applyDiagramId(requirements, diagramId);
         MaterialQuantity[] inputs = new MaterialQuantity[inputIds.length];
@@ -115,7 +126,7 @@ public class RecipeInjector {
             inputs[i] = new MaterialQuantity(inputIds[i], null, null, 1, new BsonDocument());
         }
         MaterialQuantity primaryOutput = new MaterialQuantity(outputId, null, null, 1, new BsonDocument());
-        overrideRecipe(recipeId, inputs, primaryOutput, finalRequirements, timeSeconds);
+        overrideRecipe(recipeId, inputs, primaryOutput, finalRequirements, timeSeconds, requiredMemoriesLevel);
         return recipeId;
     }
 
@@ -124,7 +135,8 @@ public class RecipeInjector {
             MaterialQuantity[] inputs,
             MaterialQuantity primaryOutput,
             BenchRequirement[] requirements,
-            float timeSeconds
+            float timeSeconds,
+            int requiredMemoriesLevel
     ) {
         CraftingRecipe recipe = new CraftingRecipe(
                 inputs,
@@ -134,36 +146,60 @@ public class RecipeInjector {
                 requirements,
                 timeSeconds,
                 false,
-                0
+                requiredMemoriesLevel
         );
         setRecipeId(recipe, recipeId);
-        loadRecipe(recipeId, recipe, inputs, primaryOutput, requirements, timeSeconds);
+        loadRecipe(recipeId, recipe);
     }
 
     public void clearRegisteredRecipes() {
-        if (registeredRecipePaths.isEmpty()) {
-            return;
+        Path runtimeAssetsDir = SystemPaths.resolveRuntimeAssetsDir(pluginClass);
+        Path patchDirectory = runtimeAssetsDir.resolve(CraftingRecipe.getAssetStore().getPath()).resolve(PATCH_DIRECTORY);
+        List<String> discoveredRecipePaths = new ArrayList<>();
+        if (Files.isDirectory(patchDirectory)) {
+            try (var paths = Files.walk(patchDirectory)) {
+                paths.filter(Files::isRegularFile).forEach(path -> {
+                    String relativePath = runtimeAssetsDir.relativize(path).toString().replace('\\', '/');
+                    discoveredRecipePaths.add(relativePath);
+                });
+            } catch (IOException e) {
+                throw new IllegalStateException("Failed scanning generated JS recipe assets.", e);
+            }
         }
+
+        List<String> recipePathsToClear = discoveredRecipePaths.isEmpty()
+                ? List.copyOf(registeredRecipePaths)
+                : discoveredRecipePaths;
 
         String assetPackName = assetPackNameSupplier.get();
         Path runtimeAssetPackFile = SystemPaths.resolveRuntimeAssetPackFile(pluginClass);
-        try (var archiveFileSystem = RuntimeAssetPackUtils.openArchive(runtimeAssetPackFile)) {
-            List<Path> archivePaths = new ArrayList<>(registeredRecipePaths.size());
-            for (String relativePath : registeredRecipePaths) {
-                archivePaths.add(archiveFileSystem.getPath("/" + relativePath.replace('\\', '/')));
+        if (!recipePathsToClear.isEmpty() && Files.exists(runtimeAssetPackFile)) {
+            try {
+                try (var archiveFileSystem = RuntimeAssetPackUtils.openArchive(runtimeAssetPackFile)) {
+                    List<Path> archivePaths = new ArrayList<>(recipePathsToClear.size());
+                    for (String relativePath : recipePathsToClear) {
+                        archivePaths.add(archiveFileSystem.getPath("/" + relativePath.replace('\\', '/')));
+                    }
+                    CraftingRecipe.getAssetStore().removeAssetWithPaths(assetPackName, archivePaths);
+                }
+            } catch (IOException ignored) {
+                // Best-effort; source cleanup below is the authoritative undo path.
             }
-            CraftingRecipe.getAssetStore().removeAssetWithPaths(assetPackName, archivePaths);
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed removing JS recipe assets from runtime pack.", e);
         }
 
-        Path runtimeAssetsDir = SystemPaths.resolveRuntimeAssetsDir(pluginClass);
-        for (String recipePath : registeredRecipePaths) {
+        for (String recipePath : recipePathsToClear) {
             try {
                 Files.deleteIfExists(runtimeAssetsDir.resolve(recipePath));
             } catch (IOException ignored) {
-                // Best-effort cleanup; the asset store removal already detached the recipe.
+                // Best-effort cleanup; source removal is sufficient for future rebuilds.
             }
+        }
+        try {
+            if (Files.isDirectory(patchDirectory)) {
+                Files.deleteIfExists(patchDirectory);
+            }
+        } catch (IOException ignored) {
+            // Best-effort cleanup.
         }
         try {
             RuntimeAssetPackUtils.rebuildArchive(runtimeAssetsDir, runtimeAssetPackFile);
@@ -173,15 +209,8 @@ public class RecipeInjector {
         registeredRecipePaths.clear();
     }
 
-    private void loadRecipe(
-            String recipeId,
-            CraftingRecipe recipe,
-            MaterialQuantity[] inputs,
-            MaterialQuantity primaryOutput,
-            BenchRequirement[] requirements,
-            float timeSeconds
-    ) {
-        String recipeRelativePath = writeRecipeAsset(recipeId, inputs, primaryOutput, requirements, timeSeconds);
+    private void loadRecipe(String recipeId, CraftingRecipe recipe) {
+        String recipeRelativePath = writeRecipeAsset(recipeId, recipe);
         Path runtimeAssetsDir = SystemPaths.resolveRuntimeAssetsDir(pluginClass);
         Path runtimeAssetPackFile = SystemPaths.resolveRuntimeAssetPackFile(pluginClass);
         try {
@@ -218,7 +247,8 @@ public class RecipeInjector {
         BenchType benchType = requirements[0].type;
         String diagramId = parseDiagramId(specialArg, benchType);
         float timeSeconds = parseTimeSeconds(specialArg, benchType);
-        return new RecipeDefinition(requirements, inputIds, outputId, diagramId, timeSeconds);
+        int requiredMemoriesLevel = parseRequiredMemoriesLevel(args);
+        return new RecipeDefinition(requirements, inputIds, outputId, diagramId, timeSeconds, requiredMemoriesLevel);
     }
 
     private BenchRequirement[] parseBenchRequirementsArgument(Object[] args) {
@@ -271,6 +301,23 @@ public class RecipeInjector {
         }
         Object specialArg = args[3];
         return specialArg == Scriptable.NOT_FOUND ? null : specialArg;
+    }
+
+    private int parseRequiredMemoriesLevel(Object[] args) {
+        if (args.length < 5 || args[4] == null || args[4] == Scriptable.NOT_FOUND) {
+            return 1;
+        }
+        Object value = args[4];
+        int parsedValue;
+        if (value instanceof Number number) {
+            parsedValue = number.intValue();
+        } else {
+            parsedValue = Integer.parseInt(String.valueOf(value));
+        }
+        if (parsedValue < 1) {
+            throw new IllegalArgumentException("requiredMemoriesLevel must be greater than or equal to 1.");
+        }
+        return parsedValue;
     }
 
     private String parseDiagramId(Object specialArg, BenchType benchType) {
@@ -348,24 +395,19 @@ public class RecipeInjector {
         }
     }
 
-    private String writeRecipeAsset(
-            String recipeId,
-            MaterialQuantity[] inputs,
-            MaterialQuantity primaryOutput,
-            BenchRequirement[] requirements,
-            float timeSeconds
-    ) {
+    private String writeRecipeAsset(String recipeId, CraftingRecipe recipe) {
         try {
             Path runtimeAssetsDir = SystemPaths.resolveRuntimeAssetsDir(pluginClass);
             Path recipeDir = runtimeAssetsDir.resolve(CraftingRecipe.getAssetStore().getPath());
-            Files.createDirectories(recipeDir);
+            Path patchDir = recipeDir.resolve(PATCH_DIRECTORY);
+            Files.createDirectories(patchDir);
 
             String extension = CraftingRecipe.getAssetStore().getExtension();
-            String relativePath = CraftingRecipe.getAssetStore().getPath() + "/" + recipeId + extension;
+            String relativePath = CraftingRecipe.getAssetStore().getPath() + "/" + PATCH_DIRECTORY + "/" + recipeId + extension;
             Path recipePath = runtimeAssetsDir.resolve(relativePath);
             Files.writeString(
                     recipePath,
-                    toRecipeJson(inputs, primaryOutput, requirements, timeSeconds),
+                    toRecipeJson(recipe),
                     StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING,
@@ -377,33 +419,38 @@ public class RecipeInjector {
         }
     }
 
-    private String toRecipeJson(
-            MaterialQuantity[] inputs,
-            MaterialQuantity primaryOutput,
-            BenchRequirement[] requirements,
-            float timeSeconds
-    ) {
+    private String toRecipeJson(CraftingRecipe recipe) {
+        MaterialQuantity[] inputs = recipe.getInput();
+        MaterialQuantity[] outputs = recipe.getOutputs();
+        MaterialQuantity primaryOutput = recipe.getPrimaryOutput();
+        BenchRequirement[] requirements = recipe.getBenchRequirement();
         return """
                 {
                   "Input": [%s],
                   "Output": [%s],
                   "PrimaryOutput": %s,
-                  "OutputQuantity": 1,
+                  "OutputQuantity": %d,
                   "BenchRequirement": [%s],
                   "TimeSeconds": %s,
-                  "KnowledgeRequired": false,
-                  "RequiredMemoriesLevel": 1
+                  "KnowledgeRequired": %s,
+                  "RequiredMemoriesLevel": %d
                 }
                 """.formatted(
                 joinMaterials(inputs),
+                joinMaterials(outputs),
                 materialJson(primaryOutput),
-                materialJson(primaryOutput),
+                getPrimaryOutputQuantity(recipe),
                 joinBenchRequirements(requirements),
-                formatDouble(timeSeconds)
+                formatDouble(recipe.getTimeSeconds()),
+                Boolean.toString(recipe.isKnowledgeRequired()),
+                recipe.getRequiredMemoriesLevel()
         );
     }
 
     private String joinMaterials(MaterialQuantity[] materials) {
+        if (materials == null || materials.length == 0) {
+            return "";
+        }
         List<String> parts = new ArrayList<>(materials.length);
         for (MaterialQuantity material : materials) {
             parts.add(materialJson(material));
@@ -412,6 +459,9 @@ public class RecipeInjector {
     }
 
     private String joinBenchRequirements(BenchRequirement[] requirements) {
+        if (requirements == null || requirements.length == 0) {
+            return "";
+        }
         List<String> parts = new ArrayList<>(requirements.length);
         for (BenchRequirement requirement : requirements) {
             parts.add("""
@@ -475,6 +525,31 @@ public class RecipeInjector {
         };
     }
 
+    private BenchRequirement[] removeMatchedBenchRequirements(CraftingRecipe recipe, RecipeFilter recipeFilter) {
+        List<BenchRequirement> expectedRequirements = recipeFilter.benchRequirements();
+        BenchRequirement[] recipeRequirements = recipe.getBenchRequirement();
+        if (expectedRequirements.isEmpty() || recipeRequirements == null || recipeRequirements.length == 0) {
+            return new BenchRequirement[0];
+        }
+
+        List<BenchRequirement> remaining = new ArrayList<>();
+        for (BenchRequirement actualRequirement : recipeRequirements) {
+            boolean matched = expectedRequirements.stream().anyMatch(expected -> RecipeFilters.sameBenchRequirement(actualRequirement, expected));
+            if (!matched) {
+                remaining.add(actualRequirement);
+            }
+        }
+        return remaining.toArray(new BenchRequirement[0]);
+    }
+
+    private int getPrimaryOutputQuantity(CraftingRecipe recipe) {
+        try {
+            return primaryOutputQuantityField.getInt(recipe);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Could not read CraftingRecipe primaryOutputQuantity.", e);
+        }
+    }
+
     private Object[] sliceArgs(Object[] args, int startIndex) {
         Object[] sliced = new Object[Math.max(args.length - startIndex, 0)];
         System.arraycopy(args, startIndex, sliced, 0, sliced.length);
@@ -504,7 +579,8 @@ public class RecipeInjector {
             String[] inputIds,
             String outputId,
             String diagramId,
-            float timeSeconds
+            float timeSeconds,
+            int requiredMemoriesLevel
     ) {
     }
 }

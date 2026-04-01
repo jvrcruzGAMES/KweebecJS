@@ -3,11 +3,7 @@ package games.jvrcruz.kweebecjs.rhino;
 import java.util.Arrays;
 
 public enum KweebecJSEventType {
-    PLUGIN_START("plugin:start"),
-    RECIPES_REGISTER("recipes:register"),
-    PLUGIN_READY("plugin:ready"),
-    PLUGIN_ERROR("plugin:error"),
-    PLUGIN_SHUTDOWN("plugin:shutdown");
+    RECIPES_REGISTER("recipes:register");
 
     private final String jsEventType;
 
