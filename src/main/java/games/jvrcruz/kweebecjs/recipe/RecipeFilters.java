@@ -9,6 +9,8 @@ import org.mozilla.javascript.Wrapper;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 final class RecipeFilters {
     private RecipeFilters() {
@@ -49,6 +51,24 @@ final class RecipeFilters {
         return left.type == right.type
                 && String.valueOf(left.id).equals(String.valueOf(right.id))
                 && sameStringMultiset(toList(left.categories), toList(right.categories));
+    }
+
+    static boolean matchesBenchRequirement(BenchRequirement actual, BenchRequirement expected) {
+        if (actual == null || expected == null) {
+            return false;
+        }
+        if (actual.type != expected.type) {
+            return false;
+        }
+        if (!String.valueOf(actual.id).equals(String.valueOf(expected.id))) {
+            return false;
+        }
+        List<String> expectedCategories = toList(expected.categories);
+        if (expectedCategories.isEmpty()) {
+            return true;
+        }
+        Set<String> actualCategories = new HashSet<>(toList(actual.categories));
+        return actualCategories.containsAll(expectedCategories);
     }
 
     static boolean sameStringMultiset(List<String> left, List<String> right) {

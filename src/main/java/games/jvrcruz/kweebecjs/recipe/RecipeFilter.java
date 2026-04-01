@@ -111,7 +111,7 @@ public final class RecipeFilter {
 
         List<BenchRequirement> recipeRequirementList = Arrays.asList(recipeBenchRequirements);
         for (BenchRequirement expected : benchRequirements) {
-            boolean matched = recipeRequirementList.stream().anyMatch(actual -> RecipeFilters.sameBenchRequirement(actual, expected));
+            boolean matched = recipeRequirementList.stream().anyMatch(actual -> RecipeFilters.matchesBenchRequirement(actual, expected));
             if (!matched) {
                 return false;
             }

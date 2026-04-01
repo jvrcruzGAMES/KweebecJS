@@ -25,6 +25,10 @@ public class SystemPaths {
         return resolveKweebecRootDir(pluginClass).resolve("runtime_assets.zip");
     }
 
+    public static Path resolveAssetsDir(Class<?> pluginClass) {
+        return resolveKweebecRootDir(pluginClass).resolve("assets");
+    }
+
     public static Path resolveServerRootFromModsFolder(Class<?> pluginClass) {
         try {
             Path codeSourcePath = Paths.get(

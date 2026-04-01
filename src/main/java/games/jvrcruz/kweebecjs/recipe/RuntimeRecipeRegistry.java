@@ -5,8 +5,8 @@ import com.hypixel.hytale.protocol.BenchRequirement;
 import com.hypixel.hytale.protocol.BenchType;
 import com.hypixel.hytale.server.core.asset.type.item.config.CraftingRecipe;
 import com.hypixel.hytale.server.core.inventory.MaterialQuantity;
-import games.jvrcruz.kweebecjs.asset.RuntimeAssetPackUtils;
 import games.jvrcruz.kweebecjs.rhino.ScriptItem;
+import games.jvrcruz.kweebecjs.rhino.Recipe;
 import games.jvrcruz.kweebecjs.system.SystemPaths;
 import org.bson.BsonDocument;
 import org.mozilla.javascript.NativeArray;
@@ -27,7 +27,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
 
-public class RecipeInjector {
+public class RuntimeRecipeRegistry {
     private static final String DELETED_RECIPE_BENCH_ID = "KweebecJS_DeletedRecipeBench";
     private static final String PATCH_DIRECTORY = "KweebecJS";
     private final Field recipeIdField;
@@ -36,8 +36,9 @@ public class RecipeInjector {
     private final Class<?> pluginClass;
     private final Supplier<String> assetPackNameSupplier;
     private final List<String> registeredRecipePaths = new ArrayList<>();
+    private final Map<String, CraftingRecipe> stagedRecipesById = new java.util.LinkedHashMap<>();
 
-    public RecipeInjector(Class<?> pluginClass, Supplier<String> assetPackNameSupplier) {
+    public RuntimeRecipeRegistry(Class<?> pluginClass, Supplier<String> assetPackNameSupplier) {
         this.pluginClass = pluginClass;
         this.assetPackNameSupplier = assetPackNameSupplier;
         try {
@@ -53,8 +54,28 @@ public class RecipeInjector {
     }
 
     public Object addFromArgs(Object[] args) {
-        RecipeDefinition definition = parseDefinitionArgs(args);
-        String recipeId = "KweebecJS_" + UUID.randomUUID().toString().replace("-", "");
+        RecipeDefinition definition = parseDefinitionArgs(normalizeAddArgs(args));
+        String recipeId = createRuntimeRecipeId();
+        return registerRecipe(recipeId, definition);
+    }
+
+    public Object addForRegisteredAsset(String outputItemId, Object[] args) {
+        if (outputItemId == null || outputItemId.isBlank()) {
+            throw new IllegalArgumentException("outputItemId must not be blank.");
+        }
+        Object[] normalized = normalizeAddArgs(args);
+        if (normalized.length < 3) {
+            throw new IllegalArgumentException("Recipe.new(...) for specialProperties.recipe requires at least 3 args.");
+        }
+        Object[] patched = normalized.clone();
+        int outputAmount = 1;
+        Object outputArg = unwrap(patched[2]);
+        if (outputArg instanceof ScriptItem scriptItem) {
+            outputAmount = scriptItem.getAmount();
+        }
+        patched[2] = new ScriptItem(outputItemId, outputAmount);
+        RecipeDefinition definition = parseDefinitionArgs(patched);
+        String recipeId = createRuntimeRecipeId();
         return registerRecipe(recipeId, definition);
     }
 
@@ -67,9 +88,11 @@ public class RecipeInjector {
             throw new IllegalArgumentException("event.override(filter, ...) expects a RecipeFilter as the first argument.");
         }
 
-        RecipeDefinition definition = parseDefinitionArgs(sliceArgs(args, 1));
+        RecipeDefinition definition = parseDefinitionArgs(normalizeAddArgs(sliceArgs(args, 1)));
         List<String> overriddenRecipeIds = new ArrayList<>();
-        for (Map.Entry<String, CraftingRecipe> entry : CraftingRecipe.getAssetMap().getAssetMap().entrySet()) {
+        Map<String, CraftingRecipe> candidateRecipes = new java.util.LinkedHashMap<>(CraftingRecipe.getAssetMap().getAssetMap());
+        candidateRecipes.putAll(stagedRecipesById);
+        for (Map.Entry<String, CraftingRecipe> entry : candidateRecipes.entrySet()) {
             if (!recipeFilter.matches(entry.getValue())) {
                 continue;
             }
@@ -89,7 +112,9 @@ public class RecipeInjector {
         }
 
         List<String> deletedRecipeIds = new ArrayList<>();
-        for (Map.Entry<String, CraftingRecipe> entry : CraftingRecipe.getAssetMap().getAssetMap().entrySet()) {
+        Map<String, CraftingRecipe> candidateRecipes = new java.util.LinkedHashMap<>(CraftingRecipe.getAssetMap().getAssetMap());
+        candidateRecipes.putAll(stagedRecipesById);
+        for (Map.Entry<String, CraftingRecipe> entry : candidateRecipes.entrySet()) {
             CraftingRecipe recipe = entry.getValue();
             if (!recipeFilter.matches(recipe)) {
                 continue;
@@ -107,7 +132,7 @@ public class RecipeInjector {
                     recipe.getRequiredMemoriesLevel()
             );
             setRecipeId(replacement, entry.getKey());
-            loadRecipe(entry.getKey(), replacement);
+            stageRecipe(entry.getKey(), replacement);
             deletedRecipeIds.add(entry.getKey());
         }
         return deletedRecipeIds;
@@ -157,7 +182,7 @@ public class RecipeInjector {
                 requiredMemoriesLevel
         );
         setRecipeId(recipe, recipeId);
-        loadRecipe(recipeId, recipe);
+        stageRecipe(recipeId, recipe);
     }
 
     public void clearRegisteredRecipes() {
@@ -180,8 +205,11 @@ public class RecipeInjector {
                 : discoveredRecipePaths;
 
         String assetPackName = assetPackNameSupplier.get();
-        CraftingRecipe.getAssetStore().removeAssetPack(assetPackName);
-        Path runtimeAssetPackFile = SystemPaths.resolveRuntimeAssetPackFile(pluginClass);
+        List<Path> recipePathsToRemoveFromStore = new ArrayList<>(recipePathsToClear.size());
+        for (String recipePath : recipePathsToClear) {
+            recipePathsToRemoveFromStore.add(runtimeAssetsDir.resolve(recipePath));
+        }
+        CraftingRecipe.getAssetStore().removeAssetWithPaths(assetPackName, recipePathsToRemoveFromStore);
 
         for (String recipePath : recipePathsToClear) {
             try {
@@ -205,42 +233,39 @@ public class RecipeInjector {
         } catch (IOException ignored) {
             // Best-effort cleanup.
         }
-        try {
-            RuntimeAssetPackUtils.rebuildArchive(runtimeAssetsDir, runtimeAssetPackFile);
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed rebuilding runtime asset archive after clearing JS recipes.", e);
-        }
         registeredRecipePaths.clear();
+        stagedRecipesById.clear();
     }
 
-    private void loadRecipe(String recipeId, CraftingRecipe recipe) {
+    private void stageRecipe(String recipeId, CraftingRecipe recipe) {
         String recipeRelativePath = writeRecipeAsset(recipeId, recipe);
-        Path runtimeAssetsDir = SystemPaths.resolveRuntimeAssetsDir(pluginClass);
-        Path runtimeAssetPackFile = SystemPaths.resolveRuntimeAssetPackFile(pluginClass);
-        try {
-            RuntimeAssetPackUtils.rebuildArchive(runtimeAssetsDir, runtimeAssetPackFile);
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed rebuilding runtime asset archive for JS recipe '" + recipeId + "'.", e);
+        registeredRecipePaths.add(recipeRelativePath);
+        stagedRecipesById.put(recipeId, recipe);
+    }
+
+    public int applyRegisteredRecipes() {
+        if (registeredRecipePaths.isEmpty()) {
+            return 0;
         }
 
-        try (var archiveFileSystem = RuntimeAssetPackUtils.openArchive(runtimeAssetPackFile)) {
-            Path archiveRecipePath = archiveFileSystem.getPath("/" + recipeRelativePath.replace('\\', '/'));
-            AssetLoadResult<String, CraftingRecipe> loadResult = CraftingRecipe.getAssetStore().loadAssetsFromPaths(
-                    assetPackNameSupplier.get(),
-                    List.of(archiveRecipePath)
-            );
-            if (loadResult.hasFailed()) {
-                throw new IllegalStateException(
-                        "Failed loading JS recipe '" + recipeId + "'. Failed keys: "
-                                + loadResult.getFailedToLoadKeys()
-                                + ", failed paths: "
-                                + loadResult.getFailedToLoadPaths()
-                );
-            }
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed opening runtime asset archive for JS recipe '" + recipeId + "'.", e);
+        Path runtimeAssetsDir = SystemPaths.resolveRuntimeAssetsDir(pluginClass);
+        List<Path> recipePaths = new ArrayList<>(registeredRecipePaths.size());
+        for (String recipeRelativePath : registeredRecipePaths) {
+            recipePaths.add(runtimeAssetsDir.resolve(recipeRelativePath));
         }
-        registeredRecipePaths.add(recipeRelativePath);
+        AssetLoadResult<String, CraftingRecipe> loadResult = CraftingRecipe.getAssetStore().loadAssetsFromPaths(
+                assetPackNameSupplier.get(),
+                recipePaths
+        );
+        if (loadResult.hasFailed()) {
+            throw new IllegalStateException(
+                    "Failed loading staged JS recipes. Failed keys: "
+                            + loadResult.getFailedToLoadKeys()
+                            + ", failed paths: "
+                            + loadResult.getFailedToLoadPaths()
+            );
+        }
+        return registeredRecipePaths.size();
     }
 
     private RecipeDefinition parseDefinitionArgs(Object[] args) {
@@ -538,12 +563,20 @@ public class RecipeInjector {
 
         List<BenchRequirement> remaining = new ArrayList<>();
         for (BenchRequirement actualRequirement : recipeRequirements) {
-            boolean matched = expectedRequirements.stream().anyMatch(expected -> RecipeFilters.sameBenchRequirement(actualRequirement, expected));
+            boolean matched = expectedRequirements.stream().anyMatch(expected -> RecipeFilters.matchesBenchRequirement(actualRequirement, expected));
             if (!matched) {
                 remaining.add(actualRequirement);
             }
         }
         return remaining.toArray(new BenchRequirement[0]);
+    }
+
+    private String createRuntimeRecipeId() {
+        String rawId = UUID.randomUUID().toString().replace("-", "");
+        if (rawId.isEmpty()) {
+            return "KweebecJS_A";
+        }
+        return "KweebecJS_" + Character.toUpperCase(rawId.charAt(0)) + rawId.substring(1);
     }
 
     private int getPrimaryOutputQuantity(CraftingRecipe recipe) {
@@ -569,13 +602,29 @@ public class RecipeInjector {
     }
 
     private Object unwrap(Object value) {
-        if (value instanceof Wrapper wrapper) {
-            return wrapper.unwrap();
+        Object current = value;
+        while (true) {
+            Object next = current;
+            if (current instanceof Wrapper wrapper) {
+                next = wrapper.unwrap();
+            } else if (current instanceof NativeJavaObject javaObject) {
+                next = javaObject.unwrap();
+            }
+            if (next == current) {
+                return current;
+            }
+            current = next;
         }
-        if (value instanceof NativeJavaObject javaObject) {
-            return javaObject.unwrap();
+    }
+
+    private Object[] normalizeAddArgs(Object[] args) {
+        if (args.length == 1) {
+            Object unwrapped = unwrap(args[0]);
+            if (unwrapped instanceof Recipe recipe) {
+                return recipe.args();
+            }
         }
-        return value;
+        return args;
     }
 
     private record RecipeDefinition(

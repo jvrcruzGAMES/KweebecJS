@@ -3,6 +3,9 @@ package games.jvrcruz.kweebecjs.rhino;
 import java.util.Arrays;
 
 public enum KweebecJSEventType {
+    BLOCKS_REGISTER("blocks:register"),
+    LANG_REGISTER("lang:register"),
+    ITEMS_REGISTER("items:register"),
     RECIPES_REGISTER("recipes:register");
 
     private final String jsEventType;

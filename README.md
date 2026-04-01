@@ -14,7 +14,28 @@ Exemption from the copyright holder.
 
 ## Documentation
 
-Server script API documentation is available in [DOCS.md](DOCS.md).
+Server script API documentation is available in:
+
+- [docs/README.md](docs/README.md) (category index)
+- [DOCS.md](DOCS.md) (legacy entry point)
+
+## Mod Features Summary
+
+- JavaScript event system for runtime mod content: `lang:register`, `items:register`, `blocks:register`, `recipes:register`.
+- Runtime asset pipeline based on `runtime_assets/` and in-game loading through asset pack registration (no zipfs dependency).
+- Typed asset loading from JS via `Asset.load(path, AssetTarget.X)` with extension/type validation and idempotent caching.
+- Item registration and partial/full overrides with builders:
+  - `ItemEntry`, `ItemProperties`, `ItemPropertiesOverride`
+  - `ItemSpecialProperties`, `ItemSpecialPropertiesOverride`
+- Block registration and partial/full overrides with builders:
+  - `BlockProperties`, `BlockPropertiesOverride`
+  - `BlockSpecialProperties`, `BlockSpecialPropertiesOverride`
+  - `BlockObject`/`BlockArray` helpers for complex structured properties
+- Automatic `KweebecJS_` namespacing in Java for generated custom block/item IDs.
+- Optional auto-generated block item support (with configurable icon and ability to disable generation).
+- Runtime language entry generation through `lang:register`.
+- Runtime recipe add/override/delete patching through `recipes:register` with workbench/category helpers.
+- Reload command (`kweebecjsreload` / `kjsreload`) that fully undoes and rebuilds runtime-generated content.
 
 ## Building
 

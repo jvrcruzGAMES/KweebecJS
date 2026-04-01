@@ -30,9 +30,11 @@ public class KweebecJSRuntime {
         }
 
         if (scripts.isEmpty()) {
+            Asset.clearLoadedAssets();
             return 0;
         }
 
+        Asset.clearLoadedAssets();
         Context context = Context.enter();
         try {
             ScriptableObject scope = environment.createScope(context);
