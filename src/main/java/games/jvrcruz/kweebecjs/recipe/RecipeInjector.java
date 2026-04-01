@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -114,19 +115,25 @@ public class RecipeInjector {
 
     private String registerRecipe(String recipeId, RecipeDefinition definition) {
         BenchRequirement[] requirements = definition.requirements();
-        String[] inputIds = definition.inputIds();
-        String outputId = definition.outputId();
+        ScriptItem[] inputItems = definition.inputItems();
+        ScriptItem outputItem = definition.outputItem();
         float timeSeconds = definition.timeSeconds();
         String diagramId = definition.diagramId();
         int requiredMemoriesLevel = definition.requiredMemoriesLevel();
 
         BenchRequirement[] finalRequirements = applyDiagramId(requirements, diagramId);
-        MaterialQuantity[] inputs = new MaterialQuantity[inputIds.length];
-        for (int i = 0; i < inputIds.length; i++) {
-            inputs[i] = new MaterialQuantity(inputIds[i], null, null, 1, new BsonDocument());
+        MaterialQuantity[] inputs = new MaterialQuantity[inputItems.length];
+        for (int i = 0; i < inputItems.length; i++) {
+            inputs[i] = new MaterialQuantity(inputItems[i].getID(), null, null, inputItems[i].getAmount(), new BsonDocument());
         }
-        MaterialQuantity primaryOutput = new MaterialQuantity(outputId, null, null, 1, new BsonDocument());
-        overrideRecipe(recipeId, inputs, primaryOutput, finalRequirements, timeSeconds, requiredMemoriesLevel);
+        MaterialQuantity primaryOutput = new MaterialQuantity(
+                outputItem.getID(),
+                null,
+                null,
+                outputItem.getAmount(),
+                new BsonDocument()
+        );
+        overrideRecipe(recipeId, inputs, primaryOutput, outputItem.getAmount(), finalRequirements, timeSeconds, requiredMemoriesLevel);
         return recipeId;
     }
 
@@ -134,6 +141,7 @@ public class RecipeInjector {
             String recipeId,
             MaterialQuantity[] inputs,
             MaterialQuantity primaryOutput,
+            int primaryOutputQuantity,
             BenchRequirement[] requirements,
             float timeSeconds,
             int requiredMemoriesLevel
@@ -142,7 +150,7 @@ public class RecipeInjector {
                 inputs,
                 primaryOutput,
                 new MaterialQuantity[]{primaryOutput},
-                1,
+                primaryOutputQuantity,
                 requirements,
                 timeSeconds,
                 false,
@@ -172,20 +180,8 @@ public class RecipeInjector {
                 : discoveredRecipePaths;
 
         String assetPackName = assetPackNameSupplier.get();
+        CraftingRecipe.getAssetStore().removeAssetPack(assetPackName);
         Path runtimeAssetPackFile = SystemPaths.resolveRuntimeAssetPackFile(pluginClass);
-        if (!recipePathsToClear.isEmpty() && Files.exists(runtimeAssetPackFile)) {
-            try {
-                try (var archiveFileSystem = RuntimeAssetPackUtils.openArchive(runtimeAssetPackFile)) {
-                    List<Path> archivePaths = new ArrayList<>(recipePathsToClear.size());
-                    for (String relativePath : recipePathsToClear) {
-                        archivePaths.add(archiveFileSystem.getPath("/" + relativePath.replace('\\', '/')));
-                    }
-                    CraftingRecipe.getAssetStore().removeAssetWithPaths(assetPackName, archivePaths);
-                }
-            } catch (IOException ignored) {
-                // Best-effort; source cleanup below is the authoritative undo path.
-            }
-        }
 
         for (String recipePath : recipePathsToClear) {
             try {
@@ -196,7 +192,15 @@ public class RecipeInjector {
         }
         try {
             if (Files.isDirectory(patchDirectory)) {
-                Files.deleteIfExists(patchDirectory);
+                try (var paths = Files.walk(patchDirectory)) {
+                    paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // Best-effort cleanup.
+                        }
+                    });
+                }
             }
         } catch (IOException ignored) {
             // Best-effort cleanup.
@@ -241,14 +245,14 @@ public class RecipeInjector {
 
     private RecipeDefinition parseDefinitionArgs(Object[] args) {
         BenchRequirement[] requirements = parseBenchRequirementsArgument(args);
-        String[] inputIds = parseInputItemsArgument(args);
-        String outputId = parseOutputItemArgument(args);
+        ScriptItem[] inputItems = parseInputItemsArgument(args);
+        ScriptItem outputItem = parseOutputItemArgument(args);
         Object specialArg = parseSpecialArgument(args);
         BenchType benchType = requirements[0].type;
         String diagramId = parseDiagramId(specialArg, benchType);
         float timeSeconds = parseTimeSeconds(specialArg, benchType);
         int requiredMemoriesLevel = parseRequiredMemoriesLevel(args);
-        return new RecipeDefinition(requirements, inputIds, outputId, diagramId, timeSeconds, requiredMemoriesLevel);
+        return new RecipeDefinition(requirements, inputItems, outputItem, diagramId, timeSeconds, requiredMemoriesLevel);
     }
 
     private BenchRequirement[] parseBenchRequirementsArgument(Object[] args) {
@@ -264,7 +268,7 @@ public class RecipeInjector {
         };
     }
 
-    private String[] parseInputItemsArgument(Object[] args) {
+    private ScriptItem[] parseInputItemsArgument(Object[] args) {
         if (args.length < 2) {
             throw new IllegalArgumentException("event.add requires second argument: [Item(...), ...]");
         }
@@ -272,18 +276,18 @@ public class RecipeInjector {
             throw new IllegalArgumentException("Second argument must be an array of Item instances.");
         }
 
-        List<String> itemIds = new ArrayList<>();
+        List<ScriptItem> items = new ArrayList<>();
         for (Object rawItem : itemsArray.toArray()) {
             Object unwrapped = unwrap(rawItem);
             if (!(unwrapped instanceof ScriptItem scriptItem)) {
                 throw new IllegalArgumentException("Inputs array must contain only Item(...) instances.");
             }
-            itemIds.add(scriptItem.getID());
+            items.add(scriptItem);
         }
-        return itemIds.toArray(new String[0]);
+        return items.toArray(new ScriptItem[0]);
     }
 
-    private String parseOutputItemArgument(Object[] args) {
+    private ScriptItem parseOutputItemArgument(Object[] args) {
         if (args.length < 3) {
             throw new IllegalArgumentException("event.add requires third argument: Item(...)");
         }
@@ -292,7 +296,7 @@ public class RecipeInjector {
         if (!(unwrapped instanceof ScriptItem scriptItem)) {
             throw new IllegalArgumentException("Third argument must be a single Item(...) instance.");
         }
-        return scriptItem.getID();
+        return scriptItem;
     }
 
     private Object parseSpecialArgument(Object[] args) {
@@ -576,8 +580,8 @@ public class RecipeInjector {
 
     private record RecipeDefinition(
             BenchRequirement[] requirements,
-            String[] inputIds,
-            String outputId,
+            ScriptItem[] inputItems,
+            ScriptItem outputItem,
             String diagramId,
             float timeSeconds,
             int requiredMemoriesLevel

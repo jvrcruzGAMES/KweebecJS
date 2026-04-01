@@ -109,9 +109,12 @@ public class KweebecJSEnvironment {
             @Override
             public Object call(Context cx, Scriptable callScope, Scriptable thisObj, Object[] args) {
                 if (args.length < 1) {
-                    throw new IllegalArgumentException("Usage: Item(itemId)");
+                    throw new IllegalArgumentException("Usage: Item(itemId, amount?)");
                 }
-                return new ScriptItem(Context.toString(args[0]));
+                if (args.length < 2 || args[1] == null || args[1] == Undefined.instance) {
+                    return new ScriptItem(Context.toString(args[0]));
+                }
+                return new ScriptItem(Context.toString(args[0]), ((Number) Context.jsToJava(args[1], Number.class)).intValue());
             }
         };
     }

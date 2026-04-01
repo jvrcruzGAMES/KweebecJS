@@ -54,14 +54,18 @@ eventbus.addEventListener("recipes:register", (event) => {
 
 ## Global Helpers
 
-### `Item(itemId)`
+### `Item(itemId, amount?)`
 
 Creates an item reference used in recipes and filters.
+
+- `itemId`: item ID string
+- `amount`: optional integer stack size, defaults to `1`
 
 Example:
 
 ```js
 const stick = Item("Ingredient_Stick");
+const charcoalStack = Item("Ingredient_Charcoal", 3);
 ```
 
 ### `BenchRequirement`
@@ -122,8 +126,12 @@ const torchFilter = RecipeFilter.new()
 Filter behavior:
 
 - `outputs(...)` matches the recipe primary output item
-- `inputs(...)` matches the full input item set
+- `outputs(Item(id, amount))` also matches the primary output amount
+- `inputs(...)` matches the full input item set including total quantities per item
 - `benchRequires(...)` matches one bench requirement entry
+- bench matching is exact for `Type`, `Id`, and `Categories`
+- use the real bench ID from the recipe, for example `Workbench`, `Campfire`, `Armory`, `Builders`, or `Fieldcraft`
+- category IDs are also exact, for example `Workbench_Survival` or `Tools`
 - all configured parts of the filter must match
 
 ## Recipe API
@@ -143,9 +151,9 @@ Arguments:
 1. `BenchRequirements`
    An array built with `BenchRequirement.*`
 2. `[Inputs...]`
-   Array of `Item(...)`
+   Array of `Item(...)`. Each item can include an amount.
 3. `output`
-   A single `Item(...)`
+   A single `Item(...)`. Its amount becomes the recipe output quantity.
 4. `specialArg`
    Meaning depends on recipe type:
    - `DiagramCrafting`: diagram ID string
@@ -154,6 +162,34 @@ Arguments:
    - `StructuralCrafting`: usually `null`
 5. `requiredMemoriesLevel`
    Optional integer, defaults to `1`
+
+Quantity behavior:
+
+- `Item("SomeItem")` means amount `1`
+- `Item("SomeItem", 3)` means amount `3`
+- input item amounts are written into the recipe materials
+- output item amount becomes the recipe result stack size
+
+Explicit quantity example:
+
+```js
+event.add(
+    [
+        BenchRequirement.typeRequirement("Crafting"),
+        BenchRequirement.idRequirement("Workbench"),
+        BenchRequirement.category("Workbench_Survival")
+    ],
+    [
+        Item("Ingredient_Stick", 2),
+        Item("Ingredient_Tree_Sap", 1)
+    ],
+    Item("Furniture_Crude_Torch", 4),
+    0.0,
+    1
+);
+```
+
+This recipe consumes `2x Ingredient_Stick` and `1x Ingredient_Tree_Sap`, then produces `4x Furniture_Crude_Torch`.
 
 Examples:
 
@@ -185,8 +221,7 @@ event.add(
         BenchRequirement.idRequirement("Campfire")
     ],
     [
-        Item("Ingredient_Stick"),
-        Item("Ingredient_Stick")
+        Item("Ingredient_Stick", 2)
     ],
     Item("Ingredient_Charcoal"),
     2.5,
@@ -223,8 +258,7 @@ event.add(
         BenchRequirement.categoryRequirement("Bench")
     ],
     [
-        Item("Rock_Stone"),
-        Item("Rock_Stone")
+        Item("Rock_Stone", 2)
     ],
     Item("Rock_Stone_Brick"),
     null,
@@ -280,7 +314,26 @@ Current behavior:
 - if a recipe has multiple bench requirements and the filter matches one of them, only the matching bench requirement is removed
 - if no bench requirements remain after deletion, the recipe is hidden completely
 
-Example: remove the player-inventory torch recipe while keeping the workbench recipe:
+Example: remove the workbench torch recipe:
+
+```js
+const workbenchTorchFilter = RecipeFilter.new()
+    .outputs(Item("Furniture_Crude_Torch"))
+    .inputs([
+        Item("Ingredient_Fibre"),
+        Item("Ingredient_Tree_Sap"),
+        Item("Ingredient_Stick")
+    ])
+    .benchRequires([
+        BenchRequirement.typeRequirement("Crafting"),
+        BenchRequirement.idRequirement("Workbench"),
+        BenchRequirement.category("Workbench_Survival")
+    ]);
+
+event.delete(workbenchTorchFilter);
+```
+
+If you want to target the player inventory path instead, use the `Fieldcraft` bench ID with the `Tools` category:
 
 ```js
 const playerTorchFilter = RecipeFilter.new()
@@ -295,8 +348,6 @@ const playerTorchFilter = RecipeFilter.new()
         BenchRequirement.idRequirement("Fieldcraft"),
         BenchRequirement.category("Tools")
     ]);
-
-event.delete(playerTorchFilter);
 ```
 
 ## Complete Example
@@ -333,8 +384,7 @@ eventbus.addEventListener("recipes:register", (event) => {
             BenchRequirement.idRequirement("Campfire")
         ],
         [
-            Item("Ingredient_Stick"),
-            Item("Ingredient_Stick")
+            Item("Ingredient_Stick", 2)
         ],
         Item("Ingredient_Charcoal"),
         2.5,

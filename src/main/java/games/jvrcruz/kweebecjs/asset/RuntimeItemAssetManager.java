@@ -70,7 +70,7 @@ public final class RuntimeItemAssetManager {
         Path runtimeAssetsDir = SystemPaths.resolveRuntimeAssetsDir(pluginClass);
         Path runtimeAssetPackFile = SystemPaths.resolveRuntimeAssetPackFile(pluginClass);
         Files.createDirectories(runtimeAssetsDir);
-        writeManifest(runtimeAssetsDir, manifestSupplier.get());
+        Files.deleteIfExists(runtimeAssetsDir.resolve("manifest.json"));
 
         List<String> generatedRelativePaths = writeGeneratedAssets(runtimeAssetsDir, Map.copyOf(generatedAssets));
         RuntimeAssetPackUtils.rebuildArchive(runtimeAssetsDir, runtimeAssetPackFile);
@@ -113,32 +113,6 @@ public final class RuntimeItemAssetManager {
         } catch (RuntimeException e) {
             warningLogger.accept("Failed removing runtime item asset pack.", e);
         }
-    }
-
-    private void writeManifest(Path runtimeAssetsDir, PluginManifest manifest) throws IOException {
-        String manifestJson = """
-                {
-                  "Group": "%s",
-                  "Name": "%s",
-                  "Version": "%s",
-                  "Main": "%s",
-                  "ServerVersion": "%s"
-                }
-                """.formatted(
-                manifest.getGroup(),
-                manifest.getName(),
-                manifest.getVersion(),
-                manifest.getMain(),
-                manifest.getServerVersion()
-        );
-        Files.writeString(
-                runtimeAssetsDir.resolve("manifest.json"),
-                manifestJson,
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING,
-                StandardOpenOption.WRITE
-        );
     }
 
     private List<String> writeGeneratedAssets(Path runtimeAssetsDir, Map<String, String> assetsByPath) throws IOException {

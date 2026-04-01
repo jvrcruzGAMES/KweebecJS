@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "games.jvrcruz"
-version = "1.0.0-BETA"
+version = "1.0.1-BETA"
 
 repositories {
     mavenCentral()
