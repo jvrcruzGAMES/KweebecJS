@@ -2,6 +2,16 @@
 
 A Hytale server mod built with Java.
 
+## License
+
+This project is proprietary and released under the custom
+[`KweebecJS All Rights Reserved`](LICENSE.md).
+
+Source code inspection is allowed, but distribution of the software, source
+code, forks, patches, or modified versions is prohibited unless the recipient
+is explicitly listed in [EXEMPTIONS.md](EXEMPTIONS.md) under a written License
+Exemption from the copyright holder.
+
 ## Documentation
 
 Server script API documentation is available in [DOCS.md](DOCS.md).
