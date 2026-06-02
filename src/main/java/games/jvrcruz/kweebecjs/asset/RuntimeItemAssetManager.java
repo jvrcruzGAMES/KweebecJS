@@ -1,6 +1,7 @@
 package games.jvrcruz.kweebecjs.asset;
 
 import com.hypixel.hytale.assetstore.AssetLoadResult;
+import com.hypixel.hytale.assetstore.AssetPack;
 import com.hypixel.hytale.common.plugin.PluginManifest;
 import com.hypixel.hytale.server.core.asset.AssetModule;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
@@ -96,11 +97,11 @@ public final class RuntimeItemAssetManager {
         boolean packContentChanged = lastAppliedPackContentFingerprint == null
                 || !lastAppliedPackContentFingerprint.equals(currentPackFingerprint);
         if (packMissing) {
-            assetModule.registerPack(assetPackName, runtimeAssetPackFile, manifestSupplier.get(), false);
+            assetModule.registerPack(assetPackName, runtimeAssetPackFile, manifestSupplier.get(), AssetPack.PackSource.RUNTIME);
             lastAppliedPackContentFingerprint = currentPackFingerprint;
         } else if (packContentChanged) {
             assetModule.unregisterPack(assetPackName);
-            assetModule.registerPack(assetPackName, runtimeAssetPackFile, manifestSupplier.get(), false);
+            assetModule.registerPack(assetPackName, runtimeAssetPackFile, manifestSupplier.get(), AssetPack.PackSource.RUNTIME);
             lastAppliedPackContentFingerprint = currentPackFingerprint;
         }
         List<String> generatedItemRelativePaths = new ArrayList<>(generatedRelativePaths.size());
